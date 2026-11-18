@@ -1,0 +1,17 @@
+/**:
+  ros__parameters:
+    # 相对话题名会加上 Compose 指定的 UAV_NAMESPACE，便于多机复用。
+    input_topic: control/manual
+    input_type: trajectory_msgs/msg/MultiDOFJointTrajectoryPoint
+    output_topic: mavros/setpoint_raw/local
+    output_type: mavros_msgs/msg/PositionTarget
+
+    # 仅用于无 Header 的输入；已有 Header 的消息保留原时间戳和坐标系。
+    frame_id: map
+
+    # best_effort 订阅可接收可靠和尽力发送的数据；控制指令输出默认可靠。
+    queue_depth: 10
+    input_reliability: best_effort
+    output_reliability: reliable
+    input_durability: volatile
+    output_durability: volatile

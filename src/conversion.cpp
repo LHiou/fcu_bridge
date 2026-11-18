@@ -1,0 +1,506 @@
+#include "message_bridge/conversion.hpp"
+
+#include <cmath>
+#include <optional>
+
+#include <geometry_msgs/msg/accel_stamped.hpp>
+#include <geometry_msgs/msg/point_stamped.hpp>
+#include <geometry_msgs/msg/pose_stamped.hpp>
+#include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
+#include <geometry_msgs/msg/twist_stamped.hpp>
+#include <geometry_msgs/msg/twist_with_covariance_stamped.hpp>
+#include <mavros_msgs/msg/position_target.hpp>
+#include <nav_msgs/msg/odometry.hpp>
+#include <rclcpp/serialization.hpp>
+#include <rosidl_runtime_cpp/traits.hpp>
+#include <trajectory_msgs/msg/multi_dof_joint_trajectory_point.hpp>
+
+namespace message_bridge
+{
+namespace
+{
+namespace gm = geometry_msgs::msg;
+using PositionTarget = mavros_msgs::msg::PositionTarget;
+using TrajectoryPoint = trajectory_msgs::msg::MultiDOFJointTrajectoryPoint;
+
+// optional 区分“没有提供字段”和“明确发送零值”，防止生成不存在的控制指令。
+struct Motion
+{
+    std::optional<std_msgs::msg::Header> header;
+    std::optional<gm::Point> position;
+    std::optional<gm::Quaternion> orientation;
+    std::optional<gm::Twist> velocity;
+    std::optional<gm::Accel> acceleration;
+};
+
+/** @brief 提取位置。
+ * @param input 输入消息。
+ * @return 已提供的运动字段。 */
+Motion Read(const gm::Point& input)
+{
+    // 点消息只描述位置，不附加默认姿态。
+    Motion motion;
+    motion.position = input;
+    return motion;
+}
+
+/** @brief 提取带时间戳的位置。
+ * @param input 输入消息。
+ * @return 运动字段及 Header。 */
+Motion Read(const gm::PointStamped& input)
+{
+    // 保留原始时间戳和参考系。
+    Motion motion = Read(input.point);
+    motion.header = input.header;
+    return motion;
+}
+
+/** @brief 提取位姿。
+ * @param input 输入消息。
+ * @return 位置及完整四元数。 */
+Motion Read(const gm::Pose& input)
+{
+    // 普通位姿转换保留完整姿态，只有输出设定点时才提取 yaw。
+    Motion motion = Read(input.position);
+    motion.orientation = input.orientation;
+    return motion;
+}
+
+/** @brief 提取带时间戳的位姿。
+ * @param input 输入消息。
+ * @return 运动字段及 Header。 */
+Motion Read(const gm::PoseStamped& input)
+{
+    // 将位姿和所属坐标系一同传递。
+    Motion motion = Read(input.pose);
+    motion.header = input.header;
+    return motion;
+}
+
+/** @brief 提取协方差消息中的位姿。
+ * @param input 输入消息。
+ * @return 不含协方差的位姿。 */
+Motion Read(const gm::PoseWithCovariance& input)
+{
+    // 目标控制消息不使用协方差。
+    return Read(input.pose);
+}
+
+/** @brief 提取带 Header 的协方差位姿。
+ * @param input 输入消息。
+ * @return 位姿及 Header。 */
+Motion Read(const gm::PoseWithCovarianceStamped& input)
+{
+    // 保留 Header，提取内部位姿。
+    Motion motion = Read(input.pose);
+    motion.header = input.header;
+    return motion;
+}
+
+/** @brief 提取六维速度。
+ * @param input 输入消息。
+ * @return 线速度和角速度。 */
+Motion Read(const gm::Twist& input)
+{
+    // 在中间数据中保留三个角速度分量。
+    Motion motion;
+    motion.velocity = input;
+    return motion;
+}
+
+/** @brief 提取带时间戳的速度。
+ * @param input 输入消息。
+ * @return 速度及 Header。 */
+Motion Read(const gm::TwistStamped& input)
+{
+    // 只传递坐标系名称，不执行坐标变换。
+    Motion motion = Read(input.twist);
+    motion.header = input.header;
+    return motion;
+}
+
+/** @brief 提取协方差消息中的速度。
+ * @param input 输入消息。
+ * @return 不含协方差的速度。 */
+Motion Read(const gm::TwistWithCovariance& input)
+{
+    // 控制输出只需要速度值。
+    return Read(input.twist);
+}
+
+/** @brief 提取带 Header 的协方差速度。
+ * @param input 输入消息。
+ * @return 速度及 Header。 */
+Motion Read(const gm::TwistWithCovarianceStamped& input)
+{
+    // 保留 Header，提取内部速度。
+    Motion motion = Read(input.twist);
+    motion.header = input.header;
+    return motion;
+}
+
+/** @brief 提取六维加速度。
+ * @param input 输入消息。
+ * @return 线加速度和角加速度。 */
+Motion Read(const gm::Accel& input)
+{
+    // 加速度按 m/s² 和 rad/s² 传递，不解释为力。
+    Motion motion;
+    motion.acceleration = input;
+    return motion;
+}
+
+/** @brief 提取带时间戳的加速度。
+ * @param input 输入消息。
+ * @return 加速度及 Header。 */
+Motion Read(const gm::AccelStamped& input)
+{
+    // 保留加速度对应的时间和参考系。
+    Motion motion = Read(input.accel);
+    motion.header = input.header;
+    return motion;
+}
+
+/** @brief 提取里程计位姿。
+ * @param input 输入消息。
+ * @return header 坐标系下的位姿。 */
+Motion Read(const nav_msgs::msg::Odometry& input)
+{
+    // twist 属于 child_frame_id，不能直接与 header.frame_id 下的位姿合并。
+    Motion motion = Read(input.pose);
+    motion.header = input.header;
+    return motion;
+}
+
+/** @brief 提取单关节轨迹点。
+ * @param input 当前设定点。
+ * @return 有效字段；多关节时为空。 */
+Motion Read(const TrajectoryPoint& input)
+{
+    // 此节点不执行整段轨迹，也不选择多个关节中的某一个。
+    Motion motion;
+    if (input.transforms.size() > 1 || input.velocities.size() > 1 ||
+        input.accelerations.size() > 1)
+    {
+        return motion;
+    }
+    if (!input.transforms.empty())
+    {
+        const auto& transform = input.transforms.front();
+        gm::Point point;
+        point.x = transform.translation.x;
+        point.y = transform.translation.y;
+        point.z = transform.translation.z;
+        motion.position = point;
+        motion.orientation = transform.rotation;
+    }
+    if (!input.velocities.empty())
+    {
+        motion.velocity = input.velocities.front();
+    }
+    if (!input.accelerations.empty())
+    {
+        // ROS 的轨迹点用 Twist 结构存放加速度，需按字段语义转换为 Accel。
+        gm::Accel acceleration;
+        acceleration.linear = input.accelerations.front().linear;
+        acceleration.angular = input.accelerations.front().angular;
+        motion.acceleration = acceleration;
+    }
+    return motion;
+}
+
+/** @brief 写入位置。
+ * @param motion 运动字段。
+ * @param output 输出消息。
+ * @return 是否具有位置。 */
+bool Write(const Motion& motion, gm::Point& output)
+{
+    // 未提供的位置不能用零位置代替。
+    if (!motion.position)
+    {
+        return false;
+    }
+    output = *motion.position;
+    return true;
+}
+
+/** @brief 写入带 Header 的位置。
+ * @param motion 运动字段。
+ * @param output 输出。
+ * @return 是否成功。 */
+bool Write(const Motion& motion, gm::PointStamped& output)
+{
+    // Header 由转换入口统一选择。
+    output.header = *motion.header;
+    return Write(motion, output.point);
+}
+
+/** @brief 写入位姿。
+ * @param motion 运动字段。
+ * @param output 输出。
+ * @return 是否同时具有位置和姿态。 */
+bool Write(const Motion& motion, gm::Pose& output)
+{
+    // 不为只有位置的输入虚构朝向。
+    if (!motion.orientation || !Write(motion, output.position))
+    {
+        return false;
+    }
+    output.orientation = *motion.orientation;
+    return true;
+}
+
+/** @brief 写入带 Header 的位姿。
+ * @param motion 运动字段。
+ * @param output 输出。
+ * @return 是否成功。 */
+bool Write(const Motion& motion, gm::PoseStamped& output)
+{
+    // 保持位姿时间戳和参考系一致。
+    output.header = *motion.header;
+    return Write(motion, output.pose);
+}
+
+/** @brief 写入六维速度。
+ * @param motion 运动字段。
+ * @param output 输出。
+ * @return 是否具有速度。 */
+bool Write(const Motion& motion, gm::Twist& output)
+{
+    // 完整保留线速度、角速度。
+    if (!motion.velocity)
+    {
+        return false;
+    }
+    output = *motion.velocity;
+    return true;
+}
+
+/** @brief 写入带 Header 的速度。
+ * @param motion 运动字段。
+ * @param output 输出。
+ * @return 是否成功。 */
+bool Write(const Motion& motion, gm::TwistStamped& output)
+{
+    // 只增加消息封装，不修改速度含义。
+    output.header = *motion.header;
+    return Write(motion, output.twist);
+}
+
+/** @brief 写入六维加速度。
+ * @param motion 运动字段。
+ * @param output 输出。
+ * @return 是否具有加速度。 */
+bool Write(const Motion& motion, gm::Accel& output)
+{
+    // 未提供加速度时不生成零加速度指令。
+    if (!motion.acceleration)
+    {
+        return false;
+    }
+    output = *motion.acceleration;
+    return true;
+}
+
+/** @brief 写入带 Header 的加速度。
+ * @param motion 运动字段。
+ * @param output 输出。
+ * @return 是否成功。 */
+bool Write(const Motion& motion, gm::AccelStamped& output)
+{
+    // 保留或补充转换入口选择的 Header。
+    output.header = *motion.header;
+    return Write(motion, output.accel);
+}
+
+/** @brief 生成 MAVROS 设定点。
+ * @param motion 运动字段。
+ * @param output 输出。
+ * @return 是否有控制字段。
+ */
+bool Write(const Motion& motion, PositionTarget& output)
+{
+    // 从全部忽略开始，仅启用输入实际提供的字段；ROS 端仍使用 ENU。
+    if (!motion.position && !motion.velocity && !motion.acceleration)
+    {
+        return false;
+    }
+    constexpr uint16_t kIgnorePosition =
+        PositionTarget::IGNORE_PX | PositionTarget::IGNORE_PY | PositionTarget::IGNORE_PZ;
+    constexpr uint16_t kIgnoreVelocity =
+        PositionTarget::IGNORE_VX | PositionTarget::IGNORE_VY | PositionTarget::IGNORE_VZ;
+    constexpr uint16_t kIgnoreAcceleration =
+        PositionTarget::IGNORE_AFX | PositionTarget::IGNORE_AFY | PositionTarget::IGNORE_AFZ;
+    output.header = *motion.header;
+    output.coordinate_frame = PositionTarget::FRAME_LOCAL_NED;
+    output.type_mask = kIgnorePosition | kIgnoreVelocity | kIgnoreAcceleration |
+                       PositionTarget::IGNORE_YAW | PositionTarget::IGNORE_YAW_RATE;
+    if (motion.position)
+    {
+        output.position = *motion.position;
+        output.type_mask &= ~kIgnorePosition;
+    }
+    if (motion.orientation)
+    {
+        const auto& q = *motion.orientation;
+        output.yaw = std::atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z));
+        output.type_mask &= ~PositionTarget::IGNORE_YAW;
+    }
+    if (motion.velocity)
+    {
+        output.velocity = motion.velocity->linear;
+        output.yaw_rate = motion.velocity->angular.z;
+        output.type_mask &= ~(kIgnoreVelocity | PositionTarget::IGNORE_YAW_RATE);
+    }
+    if (motion.acceleration)
+    {
+        output.acceleration_or_force = motion.acceleration->linear;
+        output.type_mask &= ~kIgnoreAcceleration;
+    }
+    return true;
+}
+
+/** @brief 解码并提取字段。
+ * @param input 序列化消息。
+ * @return 已提供的运动字段。 */
+template <typename Message>
+Motion Decode(const rclcpp::SerializedMessage& input)
+{
+    // 使用 ROS 自带序列化接口，消息定义由已安装的 ROS 包提供。
+    Message message;
+    rclcpp::Serialization<Message>().deserialize_message(&input, &message);
+    return Read(message);
+}
+
+/** @brief 编码输出。
+ * @param motion 运动字段。
+ * @param output 序列化输出。
+ * @return 是否成功。 */
+template <typename Message>
+bool Encode(const Motion& motion, rclcpp::SerializedMessage& output)
+{
+    // 只有字段足够生成目标类型时才序列化。
+    Message message;
+    if (!Write(motion, message))
+    {
+        return false;
+    }
+    rclcpp::Serialization<Message>().serialize_message(&message, &output);
+    return true;
+}
+
+enum Field
+{
+    kPosition = 1,
+    kOrientation = 2,
+    kVelocity = 4,
+    kAcceleration = 8,
+    kPose = kPosition | kOrientation,
+    kAll = kPose | kVelocity | kAcceleration
+};
+
+struct InputType
+{
+    const char* name;
+    int fields;
+    Motion (*decode)(const rclcpp::SerializedMessage&);
+};
+
+struct OutputType
+{
+    const char* name;
+    int required_fields;
+    bool (*encode)(const Motion&, rclcpp::SerializedMessage&);
+};
+
+/** @brief 声明一种输入类型。
+ * @param fields 可提取字段。
+ * @return 类型信息及解码函数。 */
+template <typename Message>
+InputType Input(int fields)
+{
+    // 类型名称直接取自 ROS 消息，避免手写名称与模板类型不一致。
+    return {rosidl_generator_traits::name<Message>(), fields, Decode<Message>};
+}
+
+/** @brief 声明一种输出类型。@param fields 必需字段。@return 类型信息及编码函数。 */
+template <typename Message>
+OutputType Output(int fields)
+{
+    // 必需字段用于启动时判断类型组合是否有意义。
+    return {rosidl_generator_traits::name<Message>(), fields, Encode<Message>};
+}
+
+const InputType kInputs[] = {
+    Input<gm::Point>(kPosition),
+    Input<gm::PointStamped>(kPosition),
+    Input<gm::Pose>(kPose),
+    Input<gm::PoseStamped>(kPose),
+    Input<gm::PoseWithCovariance>(kPose),
+    Input<gm::PoseWithCovarianceStamped>(kPose),
+    Input<gm::Twist>(kVelocity),
+    Input<gm::TwistStamped>(kVelocity),
+    Input<gm::TwistWithCovariance>(kVelocity),
+    Input<gm::TwistWithCovarianceStamped>(kVelocity),
+    Input<gm::Accel>(kAcceleration),
+    Input<gm::AccelStamped>(kAcceleration),
+    Input<nav_msgs::msg::Odometry>(kPose),
+    Input<TrajectoryPoint>(kAll),
+};
+
+const OutputType kOutputs[] = {
+    Output<gm::Point>(kPosition),
+    Output<gm::PointStamped>(kPosition),
+    Output<gm::Pose>(kPose),
+    Output<gm::PoseStamped>(kPose),
+    Output<gm::Twist>(kVelocity),
+    Output<gm::TwistStamped>(kVelocity),
+    Output<gm::Accel>(kAcceleration),
+    Output<gm::AccelStamped>(kAcceleration),
+    Output<PositionTarget>(0),
+};
+
+/** @brief 查找消息类型。
+ * @param types 支持表。
+ * @param name 类型全名。
+ * @return 条目或 nullptr。 */
+template <typename Type, size_t Size>
+const Type* Find(const Type (&types)[Size], const std::string& name)
+{
+    // 支持表很小，顺序查找即可。
+    for (const auto& type : types)
+    {
+        if (name == type.name)
+        {
+            return &type;
+        }
+    }
+    return nullptr;
+}
+}  // namespace
+
+bool CanConvert(const std::string& input_type, const std::string& output_type)
+{
+    // 排除类型本身无法提供目标字段的组合，轨迹点还需逐条检查数组内容。
+    const auto* input = Find(kInputs, input_type);
+    const auto* output = Find(kOutputs, output_type);
+    return input && output && (input->fields & output->required_fields) == output->required_fields;
+}
+
+bool Convert(const std::string& input_type, const std::string& output_type,
+    const rclcpp::SerializedMessage& input, const std_msgs::msg::Header& fallback_header,
+    rclcpp::SerializedMessage& output)
+{
+    // 先提取语义相同的字段，再按目标消息封装；无 Header 的输入才补时间和参考系。
+    if (!CanConvert(input_type, output_type))
+    {
+        return false;
+    }
+    Motion motion = Find(kInputs, input_type)->decode(input);
+    if (!motion.header)
+    {
+        motion.header = fallback_header;
+    }
+    return Find(kOutputs, output_type)->encode(motion, output);
+}
+}  // namespace message_bridge

@@ -1,0 +1,24 @@
+cmake_minimum_required(VERSION 3.16)
+project(message_bridge)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+add_compile_options(-Wall -Wextra -Wpedantic)
+
+find_package(ament_cmake REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(nav_msgs REQUIRED)
+find_package(trajectory_msgs REQUIRED)
+find_package(mavros_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
+
+add_library(conversion STATIC src/conversion.cpp)
+target_include_directories(conversion PUBLIC include)
+ament_target_dependencies(conversion rclcpp geometry_msgs nav_msgs trajectory_msgs mavros_msgs std_msgs)
+
+add_executable(bridge src/bridge.cpp)
+target_link_libraries(bridge conversion)
+install(TARGETS bridge DESTINATION lib/${PROJECT_NAME})
+
+ament_package()
