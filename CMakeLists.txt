@@ -20,5 +20,6 @@ ament_target_dependencies(conversion rclcpp geometry_msgs nav_msgs trajectory_ms
 add_executable(bridge src/bridge.cpp)
 target_link_libraries(bridge conversion)
 install(TARGETS bridge DESTINATION lib/${PROJECT_NAME})
+install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})
 
 ament_package()
