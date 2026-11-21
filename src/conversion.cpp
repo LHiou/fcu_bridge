@@ -1,4 +1,4 @@
-#include "message_bridge/conversion.hpp"
+#include "fcu_bridge/conversion.hpp"
 
 #include <cmath>
 #include <optional>
@@ -15,7 +15,7 @@
 #include <rosidl_runtime_cpp/traits.hpp>
 #include <trajectory_msgs/msg/multi_dof_joint_trajectory_point.hpp>
 
-namespace message_bridge
+namespace fcu_bridge
 {
 namespace
 {
@@ -503,4 +503,4 @@ bool Convert(const std::string& input_type, const std::string& output_type,
     }
     return Find(kOutputs, output_type)->encode(motion, output);
 }
-}  // namespace message_bridge
+}  // namespace fcu_bridge

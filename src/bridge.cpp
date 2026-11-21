@@ -5,15 +5,15 @@
 
 #include <rclcpp/rclcpp.hpp>
 
-#include "message_bridge/conversion.hpp"
+#include "fcu_bridge/conversion.hpp"
 
-namespace message_bridge
+namespace fcu_bridge
 {
 class Bridge : public rclcpp::Node
 {
 public:
     /** @brief 创建消息桥节点，连接工作由 Start 完成。 */
-    Bridge() : Node("message_bridge")
+    Bridge() : Node("fcu_bridge")
     {
         // 参数在启动时读取，运行期间不切换消息类型。
     }
@@ -44,19 +44,8 @@ public:
             RCLCPP_ERROR(get_logger(), "输入和输出解析后为同一话题，会产生循环转发");
             return false;
         }
-        const int depth = Parameter<int>("queue_depth", 10);
-        if (depth < 1)
-        {
-            RCLCPP_ERROR(get_logger(), "queue_depth 必须大于零");
-            return false;
-        }
-        rclcpp::QoS input_qos(depth);
-        rclcpp::QoS output_qos(depth);
-        if (!ConfigureQos("input", "best_effort", input_qos) ||
-            !ConfigureQos("output", "reliable", output_qos))
-        {
-            return false;
-        }
+        const auto input_qos = rclcpp::QoS(10).best_effort().durability_volatile();
+        const auto output_qos = rclcpp::QoS(10).reliable().durability_volatile();
 
         publisher_ = create_generic_publisher(output_topic, output_type_, output_qos);
         subscription_ = create_generic_subscription(input_topic, input_type_, input_qos,
@@ -79,51 +68,6 @@ private:
         rcl_interfaces::msg::ParameterDescriptor descriptor;
         descriptor.read_only = true;
         return declare_parameter<Value>(name, value, descriptor);
-    }
-
-    /**
-     * @brief 配置一个方向的 DDS 服务质量。
-     * @param prefix input 或 output。
-     * @param default_reliability 默认可靠性。
-     * @param qos 待设置的 QoS。
-     * @return 配置值有效时为 true。
-     */
-    bool ConfigureQos(
-        const std::string& prefix, const std::string& default_reliability, rclcpp::QoS& qos)
-    {
-        // 输入和输出独立配置，兼容传感器数据及需要保留的地图数据。
-        const auto reliability =
-            Parameter<std::string>(prefix + "_reliability", default_reliability);
-        const auto durability = Parameter<std::string>(prefix + "_durability", "volatile");
-        if (reliability == "reliable")
-        {
-            qos.reliable();
-        }
-        else if (reliability == "best_effort")
-        {
-            qos.best_effort();
-        }
-        else
-        {
-            RCLCPP_ERROR(
-                get_logger(), "%s_reliability 只能为 reliable 或 best_effort", prefix.c_str());
-            return false;
-        }
-        if (durability == "transient_local")
-        {
-            qos.transient_local();
-        }
-        else if (durability == "volatile")
-        {
-            qos.durability_volatile();
-        }
-        else
-        {
-            RCLCPP_ERROR(
-                get_logger(), "%s_durability 只能为 volatile 或 transient_local", prefix.c_str());
-            return false;
-        }
-        return true;
     }
 
     /** @brief 处理一条输入。
@@ -158,7 +102,7 @@ private:
     rclcpp::GenericPublisher::SharedPtr publisher_;
     rclcpp::GenericSubscription::SharedPtr subscription_;
 };
-}  // namespace message_bridge
+}  // namespace fcu_bridge
 
 /** @brief 启动消息桥。
  * @param argc 参数数量。
@@ -171,7 +115,7 @@ int main(int argc, char** argv)
     try
     {
         rclcpp::init(argc, argv);
-        auto bridge = std::make_shared<message_bridge::Bridge>();
+        auto bridge = std::make_shared<fcu_bridge::Bridge>();
         if (bridge->Start())
         {
             rclcpp::spin(bridge);
@@ -183,7 +127,7 @@ int main(int argc, char** argv)
     }
     catch (const std::exception& error)
     {
-        RCLCPP_ERROR(rclcpp::get_logger("message_bridge"), "%s", error.what());
+        RCLCPP_ERROR(rclcpp::get_logger("fcu_bridge"), "%s", error.what());
         result = 1;
     }
     if (rclcpp::ok())

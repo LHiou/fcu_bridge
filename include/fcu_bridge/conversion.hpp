@@ -5,7 +5,7 @@
 #include <rclcpp/serialized_message.hpp>
 #include <std_msgs/msg/header.hpp>
 
-namespace message_bridge
+namespace fcu_bridge
 {
 /**
  * @brief 判断是否已实现指定的跨类型转换；同类型消息由节点直接转发。
@@ -27,4 +27,4 @@ bool CanConvert(const std::string& input_type, const std::string& output_type);
 bool Convert(const std::string& input_type, const std::string& output_type,
     const rclcpp::SerializedMessage& input, const std_msgs::msg::Header& fallback_header,
     rclcpp::SerializedMessage& output);
-}  // namespace message_bridge
+}  // namespace fcu_bridge

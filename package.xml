@@ -1,8 +1,8 @@
 <?xml version="1.0"?>
 <package format="3">
-  <name>message_bridge</name>
+  <name>fcu_bridge</name>
   <version>0.1.0</version>
-  <description>配置驱动的 ROS 2 消息转换桥。</description>
+  <description>用于 FCU 接口的 ROS 2 消息转换桥。</description>
   <maintainer email="maintainer@example.com">Simulator maintainers</maintainer>
   <license>Apache-2.0</license>
   <buildtool_depend>ament_cmake</buildtool_depend>
