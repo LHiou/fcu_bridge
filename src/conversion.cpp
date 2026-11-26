@@ -1,7 +1,9 @@
 #include "fcu_bridge/conversion.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <optional>
+#include <stdexcept>
 
 #include <geometry_msgs/msg/accel_stamped.hpp>
 #include <geometry_msgs/msg/point_stamped.hpp>
@@ -11,6 +13,7 @@
 #include <geometry_msgs/msg/twist_with_covariance_stamped.hpp>
 #include <mavros_msgs/msg/position_target.hpp>
 #include <nav_msgs/msg/odometry.hpp>
+#include <quadrotor_msgs/msg/position_command.hpp>
 #include <rclcpp/serialization.hpp>
 #include <rosidl_runtime_cpp/traits.hpp>
 #include <trajectory_msgs/msg/multi_dof_joint_trajectory_point.hpp>
@@ -20,6 +23,7 @@ namespace fcu_bridge
 namespace
 {
 namespace gm = geometry_msgs::msg;
+using PositionCommand = quadrotor_msgs::msg::PositionCommand;
 using PositionTarget = mavros_msgs::msg::PositionTarget;
 using TrajectoryPoint = trajectory_msgs::msg::MultiDOFJointTrajectoryPoint;
 
@@ -479,8 +483,77 @@ const Type* Find(const Type (&types)[Size], const std::string& name)
 }
 }  // namespace
 
+// These eleven IGNORE bits are independent of the MAVLink FORCE bit.
+constexpr uint16_t kControlFields = 0xDFF;
+uint16_t IgnoreFields(const std::vector<std::string>& fields)
+{
+    if (fields.empty()) return 0;
+    static const std::pair<const char*, uint16_t> bits[] = {
+        {"px", PositionTarget::IGNORE_PX}, {"py", PositionTarget::IGNORE_PY}, {"pz", PositionTarget::IGNORE_PZ},
+        {"vx", PositionTarget::IGNORE_VX}, {"vy", PositionTarget::IGNORE_VY}, {"vz", PositionTarget::IGNORE_VZ},
+        {"ax", PositionTarget::IGNORE_AFX}, {"ay", PositionTarget::IGNORE_AFY}, {"az", PositionTarget::IGNORE_AFZ},
+        {"yaw", PositionTarget::IGNORE_YAW}, {"yaw_rate", PositionTarget::IGNORE_YAW_RATE}
+    };
+    uint16_t ignore = kControlFields;
+    for (const auto& field : fields)
+    {
+        auto bit = std::find_if(std::begin(bits), std::end(bits),
+            [&](const auto& entry) { return field == entry.first; });
+        if (bit == std::end(bits)) throw std::invalid_argument("未知控制字段: " + field);
+        ignore &= ~bit->second;
+    }
+    return ignore;
+}
+
+bool MakeTarget(const std::string& input_type, const rclcpp::SerializedMessage& input,
+    const std_msgs::msg::Header& fallback, uint16_t ignore, PositionTarget& target)
+{
+    if (input_type == rosidl_generator_traits::name<PositionTarget>())
+    {
+        rclcpp::Serialization<PositionTarget>().deserialize_message(&input, &target);
+    }
+    else if (input_type == rosidl_generator_traits::name<PositionCommand>())
+    {
+        PositionCommand cmd;
+        rclcpp::Serialization<PositionCommand>().deserialize_message(&input, &cmd);
+        if (cmd.trajectory_flag != PositionCommand::TRAJECTORY_STATUS_READY) return false;
+        target.header = cmd.header;
+        target.coordinate_frame = PositionTarget::FRAME_LOCAL_NED;
+        target.type_mask = 0;
+        target.position = cmd.position;
+        target.velocity = cmd.velocity;
+        target.acceleration_or_force = cmd.acceleration;
+        target.yaw = cmd.yaw;
+        target.yaw_rate = cmd.yaw_dot;
+    }
+    else
+    {
+        const auto* type = Find(kInputs, input_type);
+        if (!type) return false;
+        Motion motion = type->decode(input);
+        if (!motion.header) motion.header = fallback;
+        if (!Write(motion, target)) return false;
+    }
+    target.type_mask |= ignore;
+    if ((target.type_mask & kControlFields) == kControlFields) return false;
+    const auto valid = [&](uint16_t bit, double value) {
+        return (target.type_mask & bit) || std::isfinite(value);
+    };
+    const auto valid_xyz = [&](uint16_t first, const auto& v) {
+        return valid(first, v.x) && valid(first << 1, v.y) && valid(first << 2, v.z);
+    };
+    return valid_xyz(PositionTarget::IGNORE_PX, target.position) &&
+           valid_xyz(PositionTarget::IGNORE_VX, target.velocity) &&
+           valid_xyz(PositionTarget::IGNORE_AFX, target.acceleration_or_force) &&
+           valid(PositionTarget::IGNORE_YAW, target.yaw) && valid(PositionTarget::IGNORE_YAW_RATE, target.yaw_rate);
+}
+
 bool CanConvert(const std::string& input_type, const std::string& output_type)
 {
+    if (input_type == rosidl_generator_traits::name<PositionCommand>())
+    {
+        return output_type == rosidl_generator_traits::name<PositionTarget>();
+    }
     // 排除类型本身无法提供目标字段的组合，轨迹点还需逐条检查数组内容。
     const auto* input = Find(kInputs, input_type);
     const auto* output = Find(kOutputs, output_type);
@@ -495,6 +568,13 @@ bool Convert(const std::string& input_type, const std::string& output_type,
     if (!CanConvert(input_type, output_type))
     {
         return false;
+    }
+    if (output_type == rosidl_generator_traits::name<PositionTarget>())
+    {
+        PositionTarget target;
+        if (!MakeTarget(input_type, input, fallback_header, 0, target)) return false;
+        rclcpp::Serialization<PositionTarget>().serialize_message(&target, &output);
+        return true;
     }
     Motion motion = Find(kInputs, input_type)->decode(input);
     if (!motion.header)

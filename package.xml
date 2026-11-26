@@ -11,7 +11,9 @@
   <depend>nav_msgs</depend>
   <depend>trajectory_msgs</depend>
   <depend>mavros_msgs</depend>
+  <depend>quadrotor_msgs</depend>
   <depend>std_msgs</depend>
+  <depend>std_srvs</depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
   <export><build_type>ament_cmake</build_type></export>

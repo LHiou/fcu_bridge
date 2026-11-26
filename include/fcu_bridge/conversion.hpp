@@ -1,12 +1,19 @@
 #pragma once
 
 #include <string>
+#include <vector>
+#include <mavros_msgs/msg/position_target.hpp>
 
 #include <rclcpp/serialized_message.hpp>
 #include <std_msgs/msg/header.hpp>
 
 namespace fcu_bridge
 {
+// Requested inactive fields are combined with the input message's own ignore bits.
+uint16_t IgnoreFields(const std::vector<std::string>& active_fields);
+bool MakeTarget(const std::string& input_type, const rclcpp::SerializedMessage& input,
+    const std_msgs::msg::Header& fallback, uint16_t ignore, mavros_msgs::msg::PositionTarget& target);
+
 /**
  * @brief 判断是否已实现指定的跨类型转换；同类型消息由节点直接转发。
  * @param input_type 输入 ROS 类型全名。
