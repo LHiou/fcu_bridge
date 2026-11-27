@@ -2,36 +2,34 @@
 
 #include <string>
 #include <vector>
-#include <mavros_msgs/msg/position_target.hpp>
 
+#include <mavros_msgs/msg/position_target.hpp>
 #include <rclcpp/serialized_message.hpp>
 #include <std_msgs/msg/header.hpp>
 
-namespace fcu_bridge
-{
+namespace fcu_bridge {
 // Requested inactive fields are combined with the input message's own ignore bits.
-uint16_t IgnoreFields(const std::vector<std::string>& active_fields);
-bool MakeTarget(const std::string& input_type, const rclcpp::SerializedMessage& input,
-    const std_msgs::msg::Header& fallback, uint16_t ignore, mavros_msgs::msg::PositionTarget& target);
+uint16_t ignoreFields(const std::vector<std::string> &active_fields);
+bool makeTarget(const std::string &input_type, const rclcpp::SerializedMessage &input,
+                const std_msgs::msg::Header &fallback, uint16_t ignore, mavros_msgs::msg::PositionTarget &target);
 
 /**
- * @brief 判断是否已实现指定的跨类型转换；同类型消息由节点直接转发。
- * @param input_type 输入 ROS 类型全名。
- * @param output_type 输出 ROS 类型全名。
- * @return 支持时为 true。
+ * @brief 判断是否已实现指定的跨类型转换；同类型消息由节点直接转发
+ * @param input_type 输入 ROS 类型全名
+ * @param output_type 输出 ROS 类型全名
+ * @return 支持时为 true
  */
-bool CanConvert(const std::string& input_type, const std::string& output_type);
+bool canConvert(const std::string &input_type, const std::string &output_type);
 
 /**
- * @brief 转换一条消息，不执行坐标变换或轨迹跟踪。
- * @param input_type 输入 ROS 类型全名。
- * @param output_type 输出 ROS 类型全名。
- * @param input 输入序列化消息。
- * @param fallback_header 无 Header 的输入使用的时间戳和坐标系。
- * @param output 转换后的序列化消息。
- * @return 输入含有所需字段且转换成功时为 true。
+ * @brief 转换一条消息，不执行坐标变换或轨迹跟踪
+ * @param input_type 输入 ROS 类型全名
+ * @param output_type 输出 ROS 类型全名
+ * @param input 输入序列化消息
+ * @param fallback_header 无 Header 的输入使用的时间戳和坐标系
+ * @param output 转换后的序列化消息
+ * @return 输入含有所需字段且转换成功时为 true
  */
-bool Convert(const std::string& input_type, const std::string& output_type,
-    const rclcpp::SerializedMessage& input, const std_msgs::msg::Header& fallback_header,
-    rclcpp::SerializedMessage& output);
-}  // namespace fcu_bridge
+bool convert(const std::string &input_type, const std::string &output_type, const rclcpp::SerializedMessage &input,
+             const std_msgs::msg::Header &fallback_header, rclcpp::SerializedMessage &output);
+} // namespace fcu_bridge
